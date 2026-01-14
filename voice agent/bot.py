@@ -1,8 +1,15 @@
 import os
-from dotenv import load_dotenv
+import uuid
+import asyncio
+import numpy as np
+import torch
+import librosa
+from scipy.io.wavfile import write
 from loguru import logger
+from dotenv import load_dotenv
+
+from transformers import Wav2Vec2FeatureExtractor, Wav2Vec2ForCTC
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -10,29 +17,41 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
-from pipecat.frames.frames import TextFrame
-# Deepgram / Ollama services
+from pipecat.frames.frames import TextFrame, AudioRawFrame, Frame
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.deepgram.stt import DeepgramSTTService
-from pipecat.services.ollama.llm import OLLamaLLMService
 from pipecat.services.deepgram.tts import DeepgramTTSService
 from pipecat.services.google.llm import GoogleLLMService
+from pipecat.services.groq.llm import GroqLLMService
 load_dotenv(override=True)
 
+# --- Global State Management ---
 
+class UserState:
+    def __init__(self):
+        self.name = "Guest"
+        self.current_emotion = "neutral"
 
+    def get_system_prompt(self):
+        return (
+            f"You are a helpful AI assistant. The user's name is {self.name}. "
+            f"The user currently sounds {self.current_emotion}. "
+            f"Adjust your tone and empathy level to match their emotional state appropriately."
+        )
 
-SYSTEM_INSTRUCTION = "You are a helpful AI assistant."
+# Initialize shared state
+user_state = UserState()
 
-import os
-import uuid
-import asyncio
-import numpy as np
-from scipy.io.wavfile import write
-from loguru import logger
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.frames.frames import AudioRawFrame, Frame
+# --- Emotion Model Setup ---
 
-class AudioChunkRecorder(FrameProcessor):
+logger.info("Loading Emotion Recognition Model...")
+feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained("r-f/wav2vec-english-speech-emotion-recognition")
+emotion_model = Wav2Vec2ForCTC.from_pretrained("r-f/wav2vec-english-speech-emotion-recognition")
+emotion_model.eval() # Set to evaluation mode
+
+# --- Custom Processor ---
+
+class AudioEmotionClassifier(FrameProcessor):
     def __init__(self, sample_rate: int, seconds: int = 10, output_dir: str = "recordings"):
         super().__init__()
         self._sample_rate = sample_rate
@@ -43,23 +62,50 @@ class AudioChunkRecorder(FrameProcessor):
         if not os.path.exists(self._output_dir):
             os.makedirs(self._output_dir)
 
-    async def _handle_transformers_task(self, audio_data: bytes):
-        """Saves bytes to .wav and triggers background processing."""
+
+    async def _classify_emotion(self, audio_data: bytes):
+        """Saves bytes to .wav, reads it for inference, and deletes it after."""
         file_id = str(uuid.uuid4())
         file_path = os.path.join(self._output_dir, f"{file_id}.wav")
 
         try:
-            # Convert raw bytes to NumPy array (16-bit PCM)
+            # 1. Save the raw bytes to a .wav file
             audio_array = np.frombuffer(audio_data, dtype=np.int16)
-            
-            # Write directly to .wav
             write(file_path, self._sample_rate, audio_array)
+
+            # 2. Use librosa to load exactly 16k mono
+            speech, sr = librosa.load(file_path, sr=self._sample_rate)
             
-            logger.info(f"Chunk saved: {file_path}")
+            # 3. Preprocess with the feature extractor
+            # Wav2Vec2 expects 1D input normalized to zero-mean unit-variance
+            inputs = feature_extractor(speech, sampling_rate=sr, return_tensors="pt", padding=True)
             
-            # TODO: Add your transformers inference call here
+            # 4. Perform Inference
+            with torch.no_grad():
+                logits = emotion_model(inputs.input_values).logits
+            
+            # 5. Decode the CTC labels
+            # For emotion recognition, we calculate the probability across the entire sequence
+            # and pick the class that has the highest average probability across all time steps.
+            # This is safer than argmaxing individual frames which might be noise.
+            probabilities = torch.nn.functional.softmax(logits, dim=-1)
+            mean_probabilities = torch.mean(probabilities, dim=1) # Mean across time dimension
+            predicted_label_id = torch.argmax(mean_probabilities, dim=-1).item()
+            
+            emotion = emotion_model.config.id2label[predicted_label_id]
+            
+            # 6. Update Global State
+            user_state.current_emotion = emotion
+            logger.info(f"Updated Emotion: {emotion} (Confidence: {torch.max(mean_probabilities).item():.2f})")
+
         except Exception as e:
-            logger.error(f"Error saving chunk: {e}")
+            # If the error is 27, it often means the input audio was too short or empty
+            logger.error(f"Inference Error on file {file_path}: {e}")
+        
+        finally:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -67,27 +113,19 @@ class AudioChunkRecorder(FrameProcessor):
         if isinstance(frame, AudioRawFrame):
             self._buffer.extend(frame.audio)
 
-            # Check if we've hit our 10-second mark
             if len(self._buffer) >= self._target_bytes:
-                # 1. Extract exactly 10 seconds worth of data
                 chunk_to_process = bytes(self._buffer[:self._target_bytes])
-                
-                # 2. Keep any 'overflow' data for the next chunk
                 self._buffer = self._buffer[self._target_bytes:]
-                
-                # 3. Dispatch to background (Non-blocking)
-                asyncio.create_task(self._handle_transformers_task(chunk_to_process))
+                # Run classification in background
+                asyncio.create_task(self._classify_emotion(chunk_to_process))
 
-        # Pass frame along to STT/LLM without interruption
         await self.push_frame(frame, direction)
 
+# --- Main Bot Logic ---
 
 async def run_bot(webrtc_connection):
-    sample_rate = 16000  # Standardized for Deepgram & WebRTC
+    sample_rate = 16000
 
-    # ---------------------------
-    # Initialize WebRTC transport
-    # ---------------------------
     transport = SmallWebRTCTransport(
         webrtc_connection=webrtc_connection,
         params=TransportParams(
@@ -99,44 +137,33 @@ async def run_bot(webrtc_connection):
         ),
     )
 
-    # ---------------------------
-    # Initialize STT, TTS, LLM
-    # ---------------------------
     stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY"))
-
     tts = DeepgramTTSService(
         api_key=os.getenv("DEEPGRAM_API_KEY"),
         voice="aura-asteria-en",
         sample_rate=sample_rate,
     )
-
-    # llm = OLLamaLLMService(
-    #     model=os.getenv("LLM_MODEL"),
-    #     url=os.getenv("OLLAMA_SERVER"),
-    # )
-    llm = GoogleLLMService(
-        api_key=os.getenv("GOOGLE_API_KEY"),
-        model="gemini-2.0-flash"
+    llm = GroqLLMService(
+        api_key=os.getenv("GROQ_API_KEY"),
+        model="llama-3.1-8b-instant"
     )
-    # ---------------------------
-    # LLM context setup
-    # ---------------------------
-    context = LLMContext([
-        {"role": "system", "content": SYSTEM_INSTRUCTION}
-    ])
+
+    # Note: We initialize context with the current prompt. 
+    # To update it dynamically during a turn, we use a callback or update it before LLM processing.
+    context = LLMContext([{"role": "system", "content": user_state.get_system_prompt()}])
     context_aggregator = LLMContextAggregatorPair(context)
-    recorder= AudioChunkRecorder(sample_rate=sample_rate, seconds=10)
-    # ---------------------------
-    # Build pipeline
-    # ---------------------------
+    
+    # Instance of our custom classifier
+    emotion_analyzer = AudioEmotionClassifier(sample_rate=sample_rate, seconds=10)
+
     pipeline = Pipeline([
-        transport.input(),
-        recorder,
-        stt,
+        transport.input(),     # Client Audio In
+        emotion_analyzer,      # Analyze emotion in background
+        stt,                   # Speech to Text
         context_aggregator.user(),
-        llm,
-        tts,
-        transport.output(),
+        llm,                   # LLM
+        tts,                   # Text to Speech
+        transport.output(),    # Client Audio Out
         context_aggregator.assistant(),
     ])
 
@@ -148,30 +175,24 @@ async def run_bot(webrtc_connection):
         )
     )
 
-    # ---------------------------
-    # Event: client connects
-    # ---------------------------
+    # --- Update System Prompt dynamically before each LLM turn ---
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("Client connected ✅")
-
-        # Queue a greeting so TTS actually speaks
-        greeting_frame = TextFrame("Hello! How can I help you today?")
+        greeting_frame = TextFrame("Hello! I'm listening. How are you feeling today?")
         await task.queue_frames([greeting_frame])
 
-    # ---------------------------
-    # Event: client disconnects
-    # ---------------------------
+    # This hook updates the system prompt right before the LLM generates a response
+    @llm.event_handler("on_llm_response_start")
+    async def on_llm_response_start(service, frame):
+        new_prompt = user_state.get_system_prompt()
+        context.set_system_instruction(new_prompt)
+        logger.debug(f"LLM starting with prompt: {new_prompt}")
+
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         logger.warning("Client disconnected ❌")
-        # Cancel the pipeline gracefully
         await task.cancel()
 
-    # ---------------------------
-    # Start the pipeline runner
-    # ---------------------------
     runner = PipelineRunner(handle_sigint=False)
-    logger.info("Starting pipeline runner...")
     await runner.run(task)
-    logger.info("Pipeline runner finished.")
