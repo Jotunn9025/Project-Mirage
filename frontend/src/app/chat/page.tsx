@@ -5,12 +5,14 @@ import { useRouter } from "next/navigation"
 import { Header } from "@/components/header"
 import { ChatContainer, Message } from "@/components/chat/chat-container"
 import { ChatModeToggle, ChatMode } from "@/components/chat/chat-mode-toggle"
+import { AvatarSelector, AvatarOption } from "@/components/chat/avatar-selector"
 import { useAuth } from "@/contexts/auth-context"
 import { Loader2 } from "lucide-react"
 
 export default function ChatPage() {
   const router = useRouter()
   const { user, loading: authLoading } = useAuth()
+  const [selectedAvatar, setSelectedAvatar] = useState<AvatarOption | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [chatMode, setChatMode] = useState<ChatMode>("text")
@@ -24,8 +26,7 @@ export default function ChatPage() {
 
   const handleSendMessage = useCallback(
     async (content: string) => {
-      if (!user) {
-        router.push("/login")
+      if (!user || !selectedAvatar) {
         return
       }
 
@@ -41,11 +42,20 @@ export default function ChatPage() {
 
       try {
         // Prepare messages for API (last 10 messages for context)
+        // Include system message with avatar personality
+        const systemMessage = {
+          role: "user" as const,
+          content: `You are ${selectedAvatar.name}. ${selectedAvatar.personality} Your traits are: ${selectedAvatar.traits.join(", ")}. Respond in character.`,
+        }
+
         const recentMessages = [...messages, userMessage].slice(-10)
-        const apiMessages = recentMessages.map((msg) => ({
-          role: msg.role,
-          content: msg.content,
-        }))
+        const apiMessages = [
+          systemMessage,
+          ...recentMessages.map((msg) => ({
+            role: msg.role,
+            content: msg.content,
+          })),
+        ]
 
         // Call Gemini API
         const response = await fetch("/api/chat", {
@@ -84,7 +94,7 @@ export default function ChatPage() {
         setIsLoading(false)
       }
     },
-    [messages, user, router]
+    [messages, user, selectedAvatar]
   )
 
   // Show loading while checking auth
@@ -99,9 +109,21 @@ export default function ChatPage() {
     )
   }
 
-  // Donx 't render chat if not authenticated
+  // Don't render chat if not authenticated
   if (!user) {
     return null
+  }
+
+  // Show avatar selection if no avatar is selected
+  if (!selectedAvatar) {
+    return (
+      <>
+        <Header />
+        <div className="flex h-[calc(100vh-4rem)] flex-col pt-16">
+          <AvatarSelector onSelect={setSelectedAvatar} />
+        </div>
+      </>
+    )
   }
 
   return (
@@ -110,7 +132,11 @@ export default function ChatPage() {
       <div className="flex h-[calc(100vh-4rem)] flex-col pt-16">
         {/* Chat Mode Toggle */}
         <div className="border-b border-border bg-background px-4 py-3">
-          <div className="mx-auto max-w-7xl">
+          <div className="mx-auto max-w-7xl flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Chatting with:</span>
+              <span className="text-sm font-medium text-foreground">{selectedAvatar.name}</span>
+            </div>
             <ChatModeToggle mode={chatMode} onModeChange={setChatMode} />
           </div>
         </div>
@@ -122,10 +148,11 @@ export default function ChatPage() {
             onSendMessage={handleSendMessage}
             isLoading={isLoading}
             mode={chatMode}
-            avatarId="6967bbf013dd42b716eea83b"
+            glbPath={selectedAvatar.glbPath}
           />
         </div>
       </div>
     </>
   )
 }
+

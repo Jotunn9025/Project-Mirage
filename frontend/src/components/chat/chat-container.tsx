@@ -18,7 +18,7 @@ interface ChatContainerProps {
   onSendMessage: (message: string) => void
   isLoading?: boolean
   mode?: ChatMode
-  avatarId?: string
+  glbPath?: string
 }
 
 export function ChatContainer({
@@ -26,7 +26,7 @@ export function ChatContainer({
   onSendMessage,
   isLoading = false,
   mode = "text",
-  avatarId = "6967bbf013dd42b716eea83b",
+  glbPath = "/avatar.glb",
 }: ChatContainerProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -42,7 +42,7 @@ export function ChatContainer({
           <div className="lg:w-1/3 lg:border-r border-b lg:border-b-0 border-border bg-muted/30 shrink-0">
             <div className="w-full h-64 lg:h-full p-4">
               <AvatarViewer
-                avatarId={avatarId}
+                glbPath={glbPath}
                 className="w-full h-full"
                 isSpeaking={isLoading}
               />
@@ -153,3 +153,4 @@ export function ChatContainer({
     </div>
   )
 }
+
