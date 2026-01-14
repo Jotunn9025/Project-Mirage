@@ -18,7 +18,69 @@ from pipecat.services.deepgram.tts import DeepgramTTSService
 from pipecat.services.google.llm import GoogleLLMService
 load_dotenv(override=True)
 
+
+
+
 SYSTEM_INSTRUCTION = "You are a helpful AI assistant."
+
+import os
+import uuid
+import asyncio
+import numpy as np
+from scipy.io.wavfile import write
+from loguru import logger
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.frames.frames import AudioRawFrame, Frame
+
+class AudioChunkRecorder(FrameProcessor):
+    def __init__(self, sample_rate: int, seconds: int = 10, output_dir: str = "recordings"):
+        super().__init__()
+        self._sample_rate = sample_rate
+        self._target_bytes = sample_rate * 2 * 1 * seconds
+        self._buffer = bytearray()
+        self._output_dir = output_dir
+
+        if not os.path.exists(self._output_dir):
+            os.makedirs(self._output_dir)
+
+    async def _handle_transformers_task(self, audio_data: bytes):
+        """Saves bytes to .wav and triggers background processing."""
+        file_id = str(uuid.uuid4())
+        file_path = os.path.join(self._output_dir, f"{file_id}.wav")
+
+        try:
+            # Convert raw bytes to NumPy array (16-bit PCM)
+            audio_array = np.frombuffer(audio_data, dtype=np.int16)
+            
+            # Write directly to .wav
+            write(file_path, self._sample_rate, audio_array)
+            
+            logger.info(f"Chunk saved: {file_path}")
+            
+            # TODO: Add your transformers inference call here
+        except Exception as e:
+            logger.error(f"Error saving chunk: {e}")
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, AudioRawFrame):
+            self._buffer.extend(frame.audio)
+
+            # Check if we've hit our 10-second mark
+            if len(self._buffer) >= self._target_bytes:
+                # 1. Extract exactly 10 seconds worth of data
+                chunk_to_process = bytes(self._buffer[:self._target_bytes])
+                
+                # 2. Keep any 'overflow' data for the next chunk
+                self._buffer = self._buffer[self._target_bytes:]
+                
+                # 3. Dispatch to background (Non-blocking)
+                asyncio.create_task(self._handle_transformers_task(chunk_to_process))
+
+        # Pass frame along to STT/LLM without interruption
+        await self.push_frame(frame, direction)
+
 
 async def run_bot(webrtc_connection):
     sample_rate = 16000  # Standardized for Deepgram & WebRTC
@@ -63,12 +125,13 @@ async def run_bot(webrtc_connection):
         {"role": "system", "content": SYSTEM_INSTRUCTION}
     ])
     context_aggregator = LLMContextAggregatorPair(context)
-
+    recorder= AudioChunkRecorder(sample_rate=sample_rate, seconds=10)
     # ---------------------------
     # Build pipeline
     # ---------------------------
     pipeline = Pipeline([
         transport.input(),
+        recorder,
         stt,
         context_aggregator.user(),
         llm,
