@@ -1,6 +1,6 @@
 "use client"
 
-import { Suspense, useState, useEffect, useRef } from "react"
+import { Suspense, useState, useRef, useEffect } from "react"
 import { Canvas, useFrame } from "@react-three/fiber"
 import { OrbitControls, useGLTF, Environment } from "@react-three/drei"
 import { cn } from "@/lib/utils"
@@ -14,154 +14,183 @@ interface AvatarViewerProps {
   isSpeaking?: boolean // Whether avatar is currently speaking
 }
 
-// Avatar model component with speaking animation
-function AvatarModel({ glbPath, isSpeaking }: { glbPath: string; isSpeaking?: boolean }) {
-  const { scene, animations: glbAnimations } = useGLTF(glbPath)
-  const groupRef = useRef<THREE.Group>(null)
-  const headRef = useRef<THREE.Object3D | null>(null)
-  const mixerRef = useRef<THREE.AnimationMixer | null>(null)
-  const actionRef = useRef<THREE.AnimationAction | null>(null)
-  const fbxAnimationRef = useRef<THREE.AnimationClip | null>(null)
-  const timeRef = useRef(0)
-  const [fbxLoaded, setFbxLoaded] = useState(false)
+// Animation state type
+type AnimationState = "greeting" | "thinking" | "thankful"
 
+// Avatar model component with FBX animations
+function AvatarModel({ glbPath, isSpeaking }: { glbPath: string; isSpeaking?: boolean }) {
+  const { scene } = useGLTF(glbPath)
+  const groupRef = useRef<THREE.Group>(null)
+  const mixerRef = useRef<THREE.AnimationMixer | null>(null)
+  const currentActionRef = useRef<THREE.AnimationAction | null>(null)
+  const prevIsSpeakingRef = useRef<boolean>(false)
+  const [animationState, setAnimationState] = useState<AnimationState>("greeting")
+  const [animationsLoaded, setAnimationsLoaded] = useState(false)
+  
+  // Store loaded animation clips
+  const greetingAnimRef = useRef<THREE.AnimationClip | null>(null)
+  const thinkingAnimRef = useRef<THREE.AnimationClip | null>(null)
+  const thankfulAnimRef = useRef<THREE.AnimationClip | null>(null)
+
+  // Load all three FBX animations
   useEffect(() => {
-    // Enable shadows for all meshes
+    const loader = new FBXLoader()
+    let loadedCount = 0
+    const totalAnimations = 3
+
+    const checkAllLoaded = () => {
+      loadedCount++
+      if (loadedCount === totalAnimations) {
+        setAnimationsLoaded(true)
+      }
+    }
+
+    // Load Greeting animation
+    loader.load(
+      "/animations/Standing Greeting.fbx",
+      (fbx) => {
+        if (fbx.animations && fbx.animations.length > 0) {
+          greetingAnimRef.current = fbx.animations[0]
+        }
+        checkAllLoaded()
+      },
+      undefined,
+      (error) => {
+        console.warn("Failed to load Greeting animation:", error)
+        checkAllLoaded()
+      }
+    )
+
+    // Load Thinking animation
+    loader.load(
+      "/animations/Thinking.fbx",
+      (fbx) => {
+        if (fbx.animations && fbx.animations.length > 0) {
+          thinkingAnimRef.current = fbx.animations[0]
+        }
+        checkAllLoaded()
+      },
+      undefined,
+      (error) => {
+        console.warn("Failed to load Thinking animation:", error)
+        checkAllLoaded()
+      }
+    )
+
+    // Load Thankful animation
+    loader.load(
+      "/animations/Thankful.fbx",
+      (fbx) => {
+        if (fbx.animations && fbx.animations.length > 0) {
+          thankfulAnimRef.current = fbx.animations[0]
+        }
+        checkAllLoaded()
+      },
+      undefined,
+      (error) => {
+        console.warn("Failed to load Thankful animation:", error)
+        checkAllLoaded()
+      }
+    )
+  }, [])
+
+  // Set up animation mixer when animations are loaded
+  useEffect(() => {
+    if (!animationsLoaded) return
+
+    mixerRef.current = new THREE.AnimationMixer(scene)
+
+    return () => {
+      if (currentActionRef.current) {
+        currentActionRef.current.stop()
+      }
+      if (mixerRef.current) {
+        mixerRef.current.stopAllAction()
+      }
+    }
+  }, [scene, animationsLoaded])
+
+  // Handle animation state changes based on isSpeaking
+  useEffect(() => {
+    if (!animationsLoaded) return
+
+    // Detect transition from speaking to not speaking
+    if (prevIsSpeakingRef.current && !isSpeaking) {
+      // Just finished speaking - show thankful animation
+      setAnimationState("thankful")
+    } else if (isSpeaking) {
+      // Currently speaking/thinking - show thinking animation
+      setAnimationState("thinking")
+    } else if (!isSpeaking && animationState !== "thankful") {
+      // Idle - show greeting animation (unless showing thankful)
+      setAnimationState("greeting")
+    }
+
+    // Update previous value
+    prevIsSpeakingRef.current = isSpeaking || false
+  }, [isSpeaking, animationsLoaded, animationState])
+
+  // Handle animation switching
+  useEffect(() => {
+    if (!animationsLoaded || !mixerRef.current) return
+
+    let animationClip: THREE.AnimationClip | null = null
+
+    switch (animationState) {
+      case "greeting":
+        animationClip = greetingAnimRef.current
+        break
+      case "thinking":
+        animationClip = thinkingAnimRef.current
+        break
+      case "thankful":
+        animationClip = thankfulAnimRef.current
+        break
+    }
+
+    if (animationClip && mixerRef.current) {
+      // Fade out current action
+      if (currentActionRef.current) {
+        currentActionRef.current.fadeOut(0.3)
+        currentActionRef.current.stop()
+      }
+
+      // Play new animation
+      const newAction = mixerRef.current.clipAction(animationClip)
+      newAction.reset()
+      
+      // Thankful animation plays once, others loop
+      if (animationState === "thankful") {
+        newAction.setLoop(THREE.LoopOnce, 1)
+        // After thankful animation completes, switch to greeting
+        const duration = animationClip.duration
+        setTimeout(() => {
+          setAnimationState("greeting")
+        }, duration * 1000)
+      } else {
+        newAction.setLoop(THREE.LoopRepeat, Infinity)
+      }
+      
+      newAction.fadeIn(0.3)
+      newAction.play()
+      currentActionRef.current = newAction
+    }
+  }, [animationState, animationsLoaded])
+
+  // Enable shadows
+  useEffect(() => {
     scene.traverse((child) => {
       if (child instanceof THREE.Mesh) {
         child.castShadow = true
         child.receiveShadow = true
       }
     })
-
-    // Find the head/face mesh for mouth movement
-    scene.traverse((obj) => {
-      if (!headRef.current) {
-        const name = obj.name.toLowerCase()
-        if (
-          name.includes("head") ||
-          name.includes("face") ||
-          name.includes("jaw") ||
-          name.includes("mouth")
-        ) {
-          headRef.current = obj
-        }
-      }
-    })
-
-    // Fallback to scene if no head found
-    if (!headRef.current) {
-      console.warn("⚠️ Head not found, falling back to scene root")
-      headRef.current = scene
-    }
-
-    // Load FBX greeting animation
-    const loader = new FBXLoader()
-    loader.load(
-      "/animations/Standing Greeting.fbx",
-      (fbx) => {
-        // Extract animation from FBX
-        if (fbx.animations && fbx.animations.length > 0) {
-          fbxAnimationRef.current = fbx.animations[0]
-          setFbxLoaded(true)
-        }
-      },
-      undefined,
-      (error) => {
-        console.warn("Failed to load FBX animation:", error)
-        setFbxLoaded(true)
-      }
-    )
   }, [scene])
 
-  useEffect(() => {
-    if (!fbxLoaded) return
-
-    // Set up animation mixer for greeting animation
-    mixerRef.current = new THREE.AnimationMixer(scene)
-
-    // Use FBX animation if available, otherwise use GLB animations
-    let animationClip: THREE.AnimationClip | null = null
-
-    if (fbxAnimationRef.current) {
-      animationClip = fbxAnimationRef.current
-    } else if (glbAnimations && glbAnimations.length > 0) {
-      // Fallback to GLB animations
-      animationClip = glbAnimations.find(
-        (anim) =>
-          anim.name.toLowerCase().includes("greeting") ||
-          anim.name.toLowerCase().includes("idle") ||
-          anim.name.toLowerCase().includes("stand") ||
-          anim.name.toLowerCase().includes("wave")
-      ) || glbAnimations[0]
-    }
-
-    if (animationClip && mixerRef.current && !isSpeaking) {
-      actionRef.current = mixerRef.current.clipAction(animationClip)
-      actionRef.current.reset()
-      actionRef.current.setLoop(THREE.LoopRepeat)
-      actionRef.current.play()
-    }
-
-    return () => {
-      if (actionRef.current) {
-        actionRef.current.stop()
-      }
-      if (mixerRef.current) {
-        mixerRef.current.stopAllAction()
-      }
-    }
-  }, [scene, glbAnimations, fbxLoaded, isSpeaking])
-
-  // Animate mouth/head movement when speaking, or play greeting animation when idle
+  // Update animation mixer
   useFrame((state, delta) => {
-    if (!groupRef.current) return
-    timeRef.current += delta
-
-    // Update animation mixer for greeting animation
-    if (mixerRef.current && !isSpeaking) {
+    if (mixerRef.current) {
       mixerRef.current.update(delta)
-    }
-
-    if (isSpeaking) {
-      // Stop greeting animation when speaking
-      if (actionRef.current && actionRef.current.isRunning()) {
-        actionRef.current.fadeOut(0.3)
-      }
-
-      // Mouth/head movement - BIG, visible motion
-      if (headRef.current) {
-        // Head rotation for mouth movement illusion
-        headRef.current.rotation.x = Math.sin(timeRef.current * 6) * 0.15 // Nodding motion
-        headRef.current.rotation.y = Math.sin(timeRef.current * 3) * 0.2 // Side-to-side
-        headRef.current.position.y = Math.sin(timeRef.current * 6) * 0.05 // Vertical bob
-
-        // Additional mouth-like movement on the head
-        headRef.current.scale.y = 1 + Math.sin(timeRef.current * 8) * 0.03 // Vertical stretch (mouth opening)
-        headRef.current.scale.x = 1 + Math.sin(timeRef.current * 7) * 0.02 // Horizontal stretch
-      }
-
-      // Subtle body movement
-      groupRef.current.position.y = -1 + Math.sin(timeRef.current * 4) * 0.02
-      groupRef.current.rotation.y = Math.sin(timeRef.current * 3) * 0.05
-    } else {
-      // Resume greeting animation when not speaking
-      if (actionRef.current && !actionRef.current.isRunning()) {
-        actionRef.current.reset().fadeIn(0.3).play()
-      }
-
-      // Smooth reset for head movement
-      if (headRef.current) {
-        headRef.current.rotation.x *= 0.9
-        headRef.current.rotation.y *= 0.9
-        headRef.current.position.y *= 0.9
-        headRef.current.scale.x = 1 + (headRef.current.scale.x - 1) * 0.9
-        headRef.current.scale.y = 1 + (headRef.current.scale.y - 1) * 0.9
-      }
-
-      // Reset body position
-      groupRef.current.position.y = -1
-      groupRef.current.rotation.y = 0
     }
   })
 
@@ -181,16 +210,13 @@ function LoadingFallback() {
   )
 }
 
-// Main Avatar Viewer Component
+// Main Avatar Viewer
 export function AvatarViewer({
   className,
   glbPath = "/avatar.glb",
   isSpeaking = false,
 }: AvatarViewerProps) {
   const [error, setError] = useState(false)
-
-  // Ensure glbPath starts with /
-  const normalizedGlbPath = glbPath.startsWith("/") ? glbPath : `/${glbPath}`
 
   if (error) {
     return (
@@ -202,7 +228,7 @@ export function AvatarViewer({
       >
         <div className="text-center p-4 text-muted-foreground">
           <p className="text-sm">Unable to load avatar</p>
-          <p className="text-xs mt-2">Please check if {normalizedGlbPath} exists in /public</p>
+          <p className="text-xs mt-2">Please check if {glbPath} exists in /public</p>
         </div>
       </div>
     )
@@ -211,9 +237,15 @@ export function AvatarViewer({
   return (
     <div
       className={cn(
-        "relative w-full h-full bg-muted rounded-lg overflow-hidden",
+        "relative w-full h-full rounded-lg overflow-hidden",
         className
       )}
+      style={{
+        backgroundImage: "url('/background-avatar.jpg')",
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundRepeat: "no-repeat",
+      }}
     >
       <Suspense fallback={<LoadingFallback />}>
         <Canvas
@@ -236,8 +268,8 @@ export function AvatarViewer({
           {/* Environment */}
           <Environment preset="sunset" />
 
-          {/* Avatar Model */}
-          <AvatarModel glbPath={normalizedGlbPath} isSpeaking={isSpeaking} />
+          {/* Avatar */}
+          <AvatarModel glbPath={glbPath} isSpeaking={isSpeaking} />
 
           {/* Camera Controls */}
           <OrbitControls
@@ -253,4 +285,3 @@ export function AvatarViewer({
     </div>
   )
 }
-

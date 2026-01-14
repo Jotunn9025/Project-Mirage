@@ -6,6 +6,9 @@ import { AvatarViewer } from "./avatar-viewer"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
+/* =======================
+   Types
+======================= */
 export interface AvatarOption {
   id: string
   name: string
@@ -15,7 +18,10 @@ export interface AvatarOption {
   personality: string
 }
 
-const avatars: AvatarOption[] = [
+/* =======================
+   Avatar Data
+======================= */
+export const avatars: AvatarOption[] = [
   {
     id: "bruce-wayne",
     name: "Bruce Wayne",
@@ -50,11 +56,17 @@ const avatars: AvatarOption[] = [
   },
 ]
 
+/* =======================
+   Props
+======================= */
 interface AvatarSelectorProps {
   onSelect: (avatar: AvatarOption) => void
   className?: string
 }
 
+/* =======================
+   Component
+======================= */
 export function AvatarSelector({ onSelect, className }: AvatarSelectorProps) {
   const [selectedAvatar, setSelectedAvatar] = useState<AvatarOption | null>(null)
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
@@ -108,7 +120,7 @@ export function AvatarSelector({ onSelect, className }: AvatarSelectorProps) {
               {/* Card */}
               <div className="relative z-10 bg-card border rounded-2xl p-4 h-full flex flex-col">
                 {/* Avatar Preview */}
-                <div className="w-full aspect-3/4 rounded-xl overflow-hidden bg-muted mb-4">
+                <div className="w-full aspect-[3/4] rounded-xl overflow-hidden bg-muted mb-4">
                   {isHovered || isSelected ? (
                     <AvatarViewer
                       glbPath={avatar.glbPath}
@@ -168,7 +180,3 @@ export function AvatarSelector({ onSelect, className }: AvatarSelectorProps) {
     </div>
   )
 }
-
-export { avatars }
-export type { AvatarOption }
-
