@@ -5,6 +5,7 @@ import { ChatMessage } from "./chat-message"
 import { ChatInput } from "./chat-input"
 import { AvatarViewer } from "./avatar-viewer"
 import { ChatMode } from "./chat-mode-toggle"
+import { VoiceChatView } from "./voice-chat-view"
 import { cn } from "@/lib/utils"
 
 export interface Message {
@@ -19,6 +20,11 @@ interface ChatContainerProps {
   isLoading?: boolean
   mode?: ChatMode
   glbPath?: string
+  serverUrl?: string
+  speakingText?: string // Text currently being spoken for lip sync
+  currentMessage?: string // Current message content for animation selection
+  characterName?: string
+  characterInfo?: string
 }
 
 export function ChatContainer({
@@ -26,13 +32,46 @@ export function ChatContainer({
   onSendMessage,
   isLoading = false,
   mode = "text",
-  glbPath = "/avatar.glb",
+  glbPath = "/avatar-transformed.glb",
+  serverUrl,
+  speakingText,
+  currentMessage,
+  characterName = "AI Assistant",
+  characterInfo = "Friendly AI companion",
 }: ChatContainerProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
+
+  if (mode === "voice") {
+    return (
+      <div className="flex h-full flex-col">
+        <div className="flex flex-1 overflow-hidden flex-col lg:flex-row">
+          {/* Avatar Section */}
+          <div className="lg:w-1/2 lg:border-r border-b lg:border-b-0 border-border bg-muted/30 shrink-0">
+            <div className="w-full h-80 lg:h-full p-6">
+              <AvatarViewer
+                glbPath={glbPath}
+                className="w-full h-full rounded-2xl shadow-xl border border-border/50"
+                isSpeaking={false} // Real-time voice agent handles audio directly
+              />
+            </div>
+          </div>
+
+          {/* Voice Agent Control Section */}
+          <div className="flex-1 flex flex-col min-w-0 min-h-0 bg-background p-6">
+            <VoiceChatView
+              characterName={characterName}
+              characterInfo={characterInfo}
+              className="w-full h-full"
+            />
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   if (mode === "video") {
     return (
@@ -44,7 +83,9 @@ export function ChatContainer({
               <AvatarViewer
                 glbPath={glbPath}
                 className="w-full h-full"
-                isSpeaking={isLoading}
+                isSpeaking={isLoading || !!speakingText}
+                speakingText={speakingText}
+                messageContent={currentMessage}
               />
             </div>
           </div>

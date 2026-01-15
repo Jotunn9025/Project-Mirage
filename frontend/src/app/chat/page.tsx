@@ -16,6 +16,8 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [chatMode, setChatMode] = useState<ChatMode>("text")
+  const [speakingText, setSpeakingText] = useState<string>("")
+  const [currentMessage, setCurrentMessage] = useState<string>("")
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -68,7 +70,16 @@ export default function ChatPage() {
 
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}))
-          throw new Error(errorData.error || "Failed to get response from AI")
+          const errorMessage = errorData.error || "Failed to get response from AI"
+
+          // Provide helpful error messages for common issues
+          if (errorMessage.includes("GROQ_API_KEY") || errorMessage.includes("API key")) {
+            throw new Error(
+              "API key not configured. Please create a .env.local file in the frontend directory with GROQ_API_KEY=your_key"
+            )
+          }
+
+          throw new Error(errorMessage)
         }
 
         const data = await response.json()
@@ -81,6 +92,26 @@ export default function ChatPage() {
         }
 
         setMessages((prev) => [...prev, assistantResponse])
+
+        // Set current message for animation selection (this triggers animation change)
+        setCurrentMessage(assistantResponse.content)
+
+        // Trigger lip sync animation
+        setSpeakingText(assistantResponse.content)
+
+        // Calculate duration based on text length
+        const wordCount = assistantResponse.content.split(/\s+/).length
+        const duration = (wordCount / 2.5) * 1000 // ~2.5 words per second
+
+        // Keep the message content active for animation for the full duration + buffer
+        setTimeout(() => {
+          setSpeakingText("")
+          // Keep currentMessage active longer so animation can play fully
+          // Don't clear it immediately - let it stay for the animation duration
+          setTimeout(() => {
+            setCurrentMessage("")
+          }, 5000) // Keep animation active for 5 seconds after speaking ends
+        }, duration)
       } catch (error: any) {
         console.error("Error sending message:", error)
         // Show error message to user
@@ -149,6 +180,10 @@ export default function ChatPage() {
             isLoading={isLoading}
             mode={chatMode}
             glbPath={selectedAvatar.glbPath}
+            speakingText={speakingText}
+            currentMessage={currentMessage}
+            characterName={selectedAvatar.name}
+            characterInfo={`${selectedAvatar.personality} Traits: ${selectedAvatar.traits.join(", ")}`}
           />
         </div>
       </div>

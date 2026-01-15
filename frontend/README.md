@@ -2,7 +2,25 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
-First, run the development server:
+### 1. Install Dependencies
+
+```bash
+npm install
+```
+
+### 2. Set Up Environment Variables
+
+Create a `.env.local` file in the `frontend` directory with your API keys:
+
+```bash
+# Groq API Key (required for chat functionality)
+# Get your API key from: https://console.groq.com/keys
+GROQ_API_KEY=your_groq_api_key_here
+```
+
+**Important**: Without the `GROQ_API_KEY`, the chat functionality will not work.
+
+### 3. Run the Development Server
 
 ```bash
 npm run dev

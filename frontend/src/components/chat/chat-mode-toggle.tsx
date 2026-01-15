@@ -1,10 +1,10 @@
 "use client"
 
-import { MessageSquare, Video } from "lucide-react"
+import { MessageSquare, Video, Mic } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
-export type ChatMode = "text" | "video"
+export type ChatMode = "video" | "text" | "voice"
 
 interface ChatModeToggleProps {
   mode: ChatMode
@@ -31,7 +31,7 @@ export function ChatModeToggle({
         className="flex-1"
       >
         <MessageSquare className="mr-2 h-4 w-4" />
-        Text Chat
+        Text
       </Button>
       <Button
         variant={mode === "video" ? "default" : "ghost"}
@@ -40,7 +40,16 @@ export function ChatModeToggle({
         className="flex-1"
       >
         <Video className="mr-2 h-4 w-4" />
-        Video Chat
+        Avatar
+      </Button>
+      <Button
+        variant={mode === "voice" ? "default" : "ghost"}
+        size="sm"
+        onClick={() => onModeChange("voice")}
+        className="flex-1"
+      >
+        <Mic className="mr-2 h-4 w-4" />
+        Voice
       </Button>
     </div>
   )

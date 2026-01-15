@@ -33,7 +33,7 @@ export function ChatMessage({ role, content }: ChatMessageProps) {
               : "bg-muted text-muted-foreground"
           )}
         >
-          {isUser ? "U" : "AI"}
+          {isUser ? "CB" : "AI"}
         </div>
 
         {/* Message Content */}
@@ -45,7 +45,7 @@ export function ChatMessage({ role, content }: ChatMessageProps) {
               : "bg-muted text-muted-foreground"
           )}
         >
-          <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">
+          <p className="text-sm leading-relaxed whitespace-pre-wrap wrap-break-words">
             {content}
           </p>
         </div>
