@@ -28,13 +28,18 @@ class UserState:
     def __init__(self):
         self.name = "Guest"
         self.current_emotion = "neutral"
-
+        self.user_info = {}
+        self.current_character = "Alfred The Butler"
+        self.character_info = "Very Concise and Polite Gentleman.Always ready to serve."
     def get_system_prompt(self):
         return (
-            f"You are a helpful AI assistant. The user's name is {self.name}. "
+            f"The user's name is {self.name}. "
             f"The user sounds {self.current_emotion}. "
+            f"The user info is: {self.user_info}. "
+            f"The user is currently interacting with the character: {self.current_character}. "
+            "You are the character. Don't break character or reveal or even imply that you are an AI. "
+            f"The character info is: {self.character_info}. "
             "IMPORTANT: Be extremely concise (1-2 sentences). "
-            "Wait for the user to finish their thought before responding."
         )
 
 user_state = UserState()
@@ -125,7 +130,6 @@ class AudioEmotionClassifier(FrameProcessor):
         await self.push_frame(frame, direction)
 
 # --- Main Bot Logic ---
-
 async def run_bot(webrtc_connection):
     sample_rate = 16000
 
@@ -161,16 +165,27 @@ async def run_bot(webrtc_connection):
 
     task = PipelineTask(pipeline, params=PipelineParams(audio_out_sample_rate=sample_rate))
 
-    @transport.event_handler("on_user_finished_speaking")
-    async def on_user_finished_speaking(transport, transcript):
-        # The AudioEmotionClassifier handles clearing the buffer via frames
-        pass
+    # --- EVENT HANDLERS ---
+
+    @transport.event_handler("on_client_connected")
+    async def on_client_connected(transport, client_data):
+        # TEST: Send a message immediately to verify the data channel works
+        await transport.send_app_message({"type": "status", "msg": "Bot Linked!"})
+        logger.info("Data channel test message sent")
 
     @llm.event_handler("on_llm_response_start")
     async def on_llm_response_start(service, frame):
-        new_prompt = user_state.get_system_prompt()
-        context.set_system_instruction(new_prompt)
-        logger.debug(f"LLM instruction set to: {user_state.current_emotion}")
+        context.set_system_instruction(user_state.get_system_prompt())
+
+    @llm.event_handler("on_llm_response_end")
+    async def on_llm_response_end(service, frame):
+        history = context.get_messages()
+        # This will now show up in your terminal logs
+        logger.info(f"📤 Sending history update ({len(history)} messages)")
+        await transport.send_app_message({
+            "type": "history_update",
+            "history": history
+        })
 
     runner = PipelineRunner(handle_sigint=False)
     await runner.run(task)

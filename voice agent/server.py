@@ -1,9 +1,3 @@
-#
-# Copyright (c) 2024–2025, Daily
-#
-# SPDX-License-Identifier: BSD 2-Clause License
-#
-
 import argparse
 import sys
 from contextlib import asynccontextmanager
@@ -27,6 +21,25 @@ app = FastAPI()
 
 # Initialize the SmallWebRTC request handler
 small_webrtc_handler: SmallWebRTCRequestHandler = SmallWebRTCRequestHandler()
+
+@app.patch("/api/offer")  # <-- ADD THIS LINE
+async def ice_candidate(request: SmallWebRTCPatchRequest):
+    # ... (existing filtering logic)
+    if request.candidates:
+        request.candidates = [
+            c for c in request.candidates 
+            if c.candidate and c.candidate.strip() != ""
+        ]
+    
+    if not request.candidates:
+        return {"status": "success"}
+
+    try:
+        await small_webrtc_handler.handle_patch_request(request)
+    except Exception as e:
+        logger.error(f"Error handling ICE candidate: {e}")
+        
+    return {"status": "success"}
 
 
 @app.post("/api/offer")
@@ -69,6 +82,10 @@ async def ice_candidate(request: SmallWebRTCPatchRequest):
 @app.get("/")
 async def serve_index():
     return FileResponse("index.html")
+
+@app.get("/api/history")
+async def get_history():
+    return context.get_messages()
 
 
 @asynccontextmanager
