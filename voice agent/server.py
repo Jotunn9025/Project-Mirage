@@ -5,7 +5,9 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 import uvicorn
-from bot import run_bot
+from bot import run_bot, normalize_emotion
+from groq import AsyncGroq
+import json
 from database import DatabaseManager
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, Request
@@ -156,6 +158,106 @@ async def get_history(session_id: str, limit: int = None):
         }
     except Exception as e:
         logger.error(f"Error fetching history: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/api/emotions/{session_id}")
+async def get_emotions(session_id: str):
+    """Get current emotions for a specific session"""
+    try:
+        history = db.get_history(session_id)
+        if not history:
+            return {"status": "error", "message": "Session not found"}
+
+        # Format history for the model
+        convo_lines = [f"{m.get('role', 'user').upper()}: {m.get('content', '')}" for m in history[-40:]]
+        conversation_text = "\n".join(convo_lines)
+
+        system_prompt = (
+            "You are an emotion classifier. Given the conversation, "
+            "respond ONLY with a JSON object: {\"user_emotion\": \"...\", \"bot_emotion\": \"...\"}. "
+            "Values: Angry, Sad, Happy, Surprise, Fear, Disgust, Contempt, Neutral."
+        )
+
+        try:
+            client = AsyncGroq()
+            resp = await client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Conversation:\n{conversation_text}\n\nReturn JSON:"},
+                ],
+                model="llama-3.1-8b-instant",
+                temperature=0.0,
+                response_format={"type": "json_object"} # Force Groq to return JSON
+            )
+
+            # --- ROBUST EXTRACTION ---
+            # Extract the actual text content from the Groq Response Object
+            text_content = resp.choices[0].message.content
+            
+            # Parse the string into a Python dictionary
+            parsed = json.loads(text_content)
+
+            user_emotion = normalize_emotion(parsed.get("user_emotion", "Neutral"))
+            bot_emotion = normalize_emotion(parsed.get("bot_emotion", "Neutral"))
+
+            # Update DB
+            db.update_emotions(session_id, user_emotion, bot_emotion)
+
+            return {
+                "status": "success",
+                "session_id": session_id,
+                "emotions": {
+                    "user_emotion": user_emotion,
+                    "bot_emotion": bot_emotion,
+                }
+            }
+
+        except Exception as ge:
+            logger.error(f"Groq error: {ge}")
+            # Fallback to DB if LLM fails
+            emotions = db.get_emotions(session_id)
+            return {"status": "success", "session_id": session_id, "emotions": emotions}
+
+    except Exception as e:
+        logger.error(f"Error in get_emotions: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/emotion/user/{session_id}")
+async def get_user_emotion(session_id: str):
+    """Get current user emotion for a specific session"""
+    try:
+        emotions = db.get_emotions(session_id)
+        if emotions:
+            return {
+                "status": "success",
+                "session_id": session_id,
+                "emotion": emotions.get("user_emotion", "Neutral"),
+                "last_updated": emotions.get("last_updated")
+            }
+        else:
+            return {"status": "error", "message": "Session not found"}
+    except Exception as e:
+        logger.error(f"Error fetching user emotion: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/api/emotion/bot/{session_id}")
+async def get_bot_emotion(session_id: str):
+    """Get current bot emotion for a specific session"""
+    try:
+        emotions = db.get_emotions(session_id)
+        if emotions:
+            return {
+                "status": "success",
+                "session_id": session_id,
+                "emotion": emotions.get("bot_emotion", "Neutral"),
+                "last_updated": emotions.get("last_updated")
+            }
+        else:
+            return {"status": "error", "message": "Session not found"}
+    except Exception as e:
+        logger.error(f"Error fetching bot emotion: {e}")
         return {"status": "error", "message": str(e)}
 
 

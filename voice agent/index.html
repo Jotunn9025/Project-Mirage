@@ -118,6 +118,32 @@
             font-family: monospace;
         }
         
+        .emotion-display {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+        
+        .emotion-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        
+        .emotion-label {
+            font-size: 0.75em;
+            opacity: 0.9;
+            margin-bottom: 4px;
+        }
+        
+        .emotion-value {
+            font-size: 1.5em;
+            font-weight: bold;
+        }
+        
         .emotion-badge {
             display: inline-block;
             padding: 4px 8px;
@@ -199,6 +225,19 @@
         <!-- Conversation History Panel -->
         <div class="card" id="full-page">
             <h2>Conversation History</h2>
+            
+            <!-- Real-time Emotion Display -->
+            <div class="emotion-display" style="display: none;" id="emotion-display">
+                <div class="emotion-card">
+                    <div class="emotion-label">Your Emotion</div>
+                    <div class="emotion-value" id="user-emotion">Neutral</div>
+                </div>
+                <div class="emotion-card" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+                    <div class="emotion-label">Bot Emotion</div>
+                    <div class="emotion-value" id="bot-emotion">Neutral</div>
+                </div>
+            </div>
+            
             <div class="history-container" id="history-log">
                 <p style="text-align: center; color: #999;">No messages yet</p>
             </div>
@@ -216,6 +255,10 @@
         const sessionIdEl = document.getElementById("session-id");
         const clearSessionBtn = document.getElementById("clear-session-btn");
         
+        const emotionDisplay = document.getElementById("emotion-display");
+        const userEmotionEl = document.getElementById("user-emotion");
+        const botEmotionEl = document.getElementById("bot-emotion");
+        
         const userNameInput = document.getElementById("user-name");
         const characterSelect = document.getElementById("character-select");
         const characterNameInput = document.getElementById("character-name");
@@ -225,6 +268,7 @@
         let peerConnection = null;
         let dataChannel = null;
         let sessionId = null;
+        let emotionUpdateInterval = null;
 
         // Predefined characters
         const characters = {
@@ -270,6 +314,24 @@
             characterNameInput.disabled = locked;
             characterInfoInput.disabled = locked;
         };
+        
+        // Fetch and update emotions periodically
+        const updateEmotions = async () => {
+            if (!sessionId) return;
+            
+            try {
+                const response = await fetch(`/api/emotions/${sessionId}`);
+                const data = await response.json();
+                
+                if (data.status === "success" && data.emotions) {
+                    userEmotionEl.textContent = data.emotions.user_emotion || "Neutral";
+                    botEmotionEl.textContent = data.emotions.bot_emotion || "Neutral";
+                    emotionDisplay.style.display = "grid";
+                }
+            } catch (err) {
+                console.error("Error fetching emotions:", err);
+            }
+        };
 
         // Data channel setup
         const setupDataChannel = (channel) => {
@@ -293,6 +355,10 @@
                 console.log("✅ Data Channel Open");
                 // Request initial history
                 sendMessage({ type: "get_history" });
+                
+                // Start emotion polling
+                emotionUpdateInterval = setInterval(updateEmotions, 1000);
+                updateEmotions(); // Immediate first update
             };
             
             channel.onerror = (err) => console.error("❌ Data Channel Error:", err);
@@ -460,6 +526,13 @@
             buttonEl.textContent = "Connect"; 
             connected = false;
             dataChannel = null;
+            
+            // Stop emotion polling
+            if (emotionUpdateInterval) {
+                clearInterval(emotionUpdateInterval);
+                emotionUpdateInterval = null;
+            }
+            emotionDisplay.style.display = "none";
         };
 
         const disconnect = () => {
