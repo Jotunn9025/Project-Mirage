@@ -1,0 +1,52 @@
+.avatar-container {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+    padding: var(--spacing-sm) 0;
+}
+
+.avatar-canvas {
+    width: 300px;
+    height: 300px;
+    margin-bottom: 0px;
+}
+
+.avatar-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-sm);
+    text-align: center;
+}
+
+.status-pill {
+    display: inline-block;
+    padding: 6px 14px;
+    border-radius: 100px;
+    font-size: 0.65rem;
+    font-weight: 800;
+    letter-spacing: 1px;
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-muted);
+    border: 1px solid var(--border-color);
+    text-transform: uppercase;
+}
+
+.status-pill.active {
+    background: rgba(0, 135, 90, 0.1);
+    color: var(--accent-green);
+    border-color: rgba(0, 135, 90, 0.3);
+    box-shadow: 0 0 15px rgba(0, 135, 90, 0.1);
+}
+
+.mood-label {
+    font-family: var(--font-display);
+    font-size: 2rem;
+    font-weight: 800;
+    color: var(--text-primary);
+    text-transform: capitalize;
+    letter-spacing: -0.5px;
+    line-height: 1.2;
+}
