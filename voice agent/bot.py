@@ -5,7 +5,7 @@ import torch
 from loguru import logger
 from dotenv import load_dotenv
 
-from transformers import Wav2Vec2FeatureExtractor, WavLMForSequenceClassification
+from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
 from pipecat.audio.vad.silero import SileroVADAnalyzer, VADParams
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -20,43 +20,36 @@ from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.deepgram.tts import DeepgramTTSService
 from pipecat.services.groq.llm import GroqLLMService
 
+from database import DatabaseManager
+
 load_dotenv(override=True)
 
-# --- Global State Management ---
+# --- Session-Based State Management ---
 
 class UserState:
-    def __init__(self):
-        self.name = "Guest"
+    def __init__(self, session_id: str, db: DatabaseManager, character_name: str, character_info: str, user_name: str):
+        self.session_id = session_id
+        self.db = db
+        self.character_name = character_name
+        self.character_info = character_info
+        self.user_name = user_name
         self.current_emotion = "neutral"
-        self.user_info = {}
-        self.current_character = "Alfred The Butler"
-        self.character_info = "Very Concise and Polite Gentleman.Always ready to serve."
+        self.pending_emotion = "neutral"  # Emotion for next message
+        
     def get_system_prompt(self):
+        """Generate system prompt - character only, no emotion"""
         return (
-            f"The user's name is {self.name}. "
-            f"The user sounds {self.current_emotion}. "
-            f"The user info is: {self.user_info}. "
-            f"The user is currently interacting with the character: {self.current_character}. "
-            "You are the character. Don't break character or reveal or even imply that you are an AI. "
-            f"The character info is: {self.character_info}. "
-            "IMPORTANT: Be extremely concise (1-2 sentences). "
+            f"You are {self.character_name}. {self.character_info}\n"
+            f"User's name: {self.user_name}\n"
+            "Stay in character. Don't break character or reveal you are an AI.\n"
+            "IMPORTANT: Be extremely concise (1-2 sentences max)."
         )
-
-user_state = UserState()
-
-# --- WavLM Odyssey Model Setup ---
-
-# Updated Imports
-from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
 
 # --- WavLM Odyssey Model Setup ---
 logger.info("Loading SER-Odyssey-Baseline-WavLM-Categorical...")
 MODEL_ID = "3loi/SER-Odyssey-Baseline-WavLM-Categorical"
 
-# Fix: Load the feature extractor from the base WavLM model
 feature_extractor = AutoFeatureExtractor.from_pretrained("microsoft/wavlm-base-plus")
-
-# Fix: Use AutoModel with trust_remote_code=True as required by this model
 emotion_model = AutoModelForAudioClassification.from_pretrained(
     MODEL_ID, 
     trust_remote_code=True
@@ -69,25 +62,22 @@ emotion_model.to(device)
 # --- Custom Processor ---
 
 class AudioEmotionClassifier(FrameProcessor):
-    def __init__(self, sample_rate: int):
+    def __init__(self, sample_rate: int, user_state: UserState):
         super().__init__()
         self._sample_rate = sample_rate
         self._buffer = bytearray()
+        self._user_state = user_state
 
     async def _classify_emotion(self, audio_data: bytes):
         try:
-            # Convert to float32
             audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
             
-            # 1. Trimming silence for accuracy
             non_silent = np.where(np.abs(audio_np) > 0.02)[0]
-            if len(non_silent) < 4000: return 
+            if len(non_silent) < 4000: 
+                return 
             audio_np = audio_np[non_silent[0]:non_silent[-1]]
-
-            # 2. Gain Normalization
             audio_np = audio_np / (np.max(np.abs(audio_np)) + 1e-6)
 
-            # 3. Extract features AND attention mask
             inputs = feature_extractor(
                 audio_np, 
                 sampling_rate=self._sample_rate, 
@@ -96,22 +86,17 @@ class AudioEmotionClassifier(FrameProcessor):
             )
             
             with torch.no_grad():
-                # Move both inputs to the correct device
                 input_values = inputs.input_values.to(device)
                 attention_mask = inputs.attention_mask.to(device)
-                
-                # FIX: Pass the mask explicitly to solve the 'missing 1 required positional argument' error
                 logits = emotion_model(input_values, mask=attention_mask)
-                
-                # 4. Calculate predictions
                 predictions = torch.nn.functional.softmax(logits, dim=-1)
                 conf, index = torch.max(predictions[0], dim=-1)
                 emotion = emotion_model.config.id2label[index.item()]
             
-            # Only update state if confidence is valid
             if conf > 0.15:
-                user_state.current_emotion = emotion.lower()
-                logger.info(f"✨ Odyssey WavLM: {emotion} ({conf*100:.1f}%)")
+                old_emotion = self._user_state.current_emotion
+                self._user_state.pending_emotion = emotion.lower()
+                logger.info(f"✨ Emotion detected: {emotion} ({conf*100:.1f}%) - Will attach to next message")
 
         except Exception as e:
             logger.error(f"WavLM Inference Error: {e}")
@@ -121,7 +106,6 @@ class AudioEmotionClassifier(FrameProcessor):
         if isinstance(frame, AudioRawFrame):
             self._buffer.extend(frame.audio)
         
-        # Trigger analysis when VAD determines speech has ended
         if isinstance(frame, VADUserStoppedSpeakingFrame):
             data = bytes(self._buffer)
             self._buffer = bytearray()
@@ -129,9 +113,53 @@ class AudioEmotionClassifier(FrameProcessor):
                 asyncio.create_task(self._classify_emotion(data))
         await self.push_frame(frame, direction)
 
+
+class EmotionAugmenter(FrameProcessor):
+    """Augments user messages with emotion before sending to LLM"""
+    def __init__(self, user_state: UserState):
+        super().__init__()
+        self._user_state = user_state
+    
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        
+        # Augment text frames going to the LLM
+        if isinstance(frame, TextFrame) and direction == FrameDirection.DOWNSTREAM:
+            emotion = self._user_state.pending_emotion
+            confidence_note = "(high confidence)" if emotion != "neutral" else "(neutral/baseline)"
+            
+            augmented_message = {
+                "message": frame.text,
+                "emotion": f"{emotion} {confidence_note}. Don't point it out or mention unless overtly asked, just adjust your behavior to better handle it in accordance to your character"
+            }
+            
+            # Update current emotion and reset pending
+            self._user_state.current_emotion = emotion
+            self._user_state.pending_emotion = "neutral"
+            
+            # Replace the text with augmented version
+            frame.text = str(augmented_message)
+            
+            logger.info(f"📝 Augmented message with emotion: {emotion}")
+        
+        await self.push_frame(frame, direction)
+
 # --- Main Bot Logic ---
-async def run_bot(webrtc_connection):
+async def run_bot(
+    webrtc_connection, 
+    session_id: str, 
+    db: DatabaseManager,
+    character_name: str = "Alfred The Butler",
+    character_info: str = "Very Concise and Polite Gentleman. Always ready to serve.",
+    user_name: str = "Guest"
+):
     sample_rate = 16000
+    
+    # Create session-specific user state with provided parameters
+    user_state = UserState(session_id, db, character_name, character_info, user_name)
+    
+    # Create session in database
+    db.create_session(session_id, user_name, character_name, character_info)
 
     transport = SmallWebRTCTransport(
         webrtc_connection=webrtc_connection,
@@ -145,22 +173,90 @@ async def run_bot(webrtc_connection):
     )
 
     stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY"))
-    tts = DeepgramTTSService(api_key=os.getenv("DEEPGRAM_API_KEY"), voice="aura-asteria-en", sample_rate=sample_rate)
-    llm = GroqLLMService(api_key=os.getenv("GROQ_API_KEY"), model="llama-3.1-8b-instant")
+    tts = DeepgramTTSService(
+        api_key=os.getenv("DEEPGRAM_API_KEY"), 
+        voice="aura-asteria-en", 
+        sample_rate=sample_rate
+    )
+    llm = GroqLLMService(
+        api_key=os.getenv("GROQ_API_KEY"), 
+        model="llama-3.1-8b-instant"
+    )
 
+    # Initialize context with system prompt (character only, no emotion)
     context = LLMContext([{"role": "system", "content": user_state.get_system_prompt()}])
     context_aggregator = LLMContextAggregatorPair(context)
-    emotion_analyzer = AudioEmotionClassifier(sample_rate=sample_rate)
+    
+    # Emotion detection (updates pending_emotion)
+    emotion_analyzer = AudioEmotionClassifier(
+        sample_rate=sample_rate, 
+        user_state=user_state
+    )
+    
+    # Emotion augmentation (adds emotion to messages before LLM)
+    emotion_augmenter = EmotionAugmenter(user_state)
+    
+    # Create a logging wrapper that properly captures messages
+    class MessageLogger(FrameProcessor):
+        def __init__(self):
+            super().__init__()
+            self._last_user_msg = None
+            self._last_assistant_msg = None
+        
+        async def process_frame(self, frame: Frame, direction: FrameDirection):
+            await super().process_frame(frame, direction)
+            
+            # Check for new messages periodically
+            messages = context.get_messages()
+            
+            # Log user messages
+            if messages and messages[-1]["role"] == "user":
+                user_msg = messages[-1]["content"]
+                if user_msg != self._last_user_msg:
+                    self._last_user_msg = user_msg
+                    db.add_message(
+                        session_id,
+                        "user",
+                        user_msg,
+                        user_state.current_emotion
+                    )
+                    logger.info(f"💾 Logged user message: {user_msg[:50]}...")
+            
+            # Log assistant messages
+            if messages and messages[-1]["role"] == "assistant":
+                assistant_msg = messages[-1]["content"]
+                if assistant_msg != self._last_assistant_msg:
+                    self._last_assistant_msg = assistant_msg
+                    db.add_message(
+                        session_id,
+                        "assistant",
+                        assistant_msg,
+                        "neutral"
+                    )
+                    logger.info(f"💾 Logged assistant message: {assistant_msg[:50]}...")
+                    
+                    # Send updated history to client
+                    history = db.get_history(session_id)
+                    await transport.send_app_message({
+                        "type": "history_update",
+                        "history": history
+                    })
+            
+            await self.push_frame(frame, direction)
+    
+    message_logger = MessageLogger()
 
     pipeline = Pipeline([
         transport.input(),
         emotion_analyzer,
         stt,
+        emotion_augmenter,  # NEW: Augment messages with emotion
         context_aggregator.user(),
         llm,
         tts,
         transport.output(),
         context_aggregator.assistant(),
+        message_logger,  # NEW: Log messages to database
     ])
 
     task = PipelineTask(pipeline, params=PipelineParams(audio_out_sample_rate=sample_rate))
@@ -169,23 +265,25 @@ async def run_bot(webrtc_connection):
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client_data):
-        # TEST: Send a message immediately to verify the data channel works
-        await transport.send_app_message({"type": "status", "msg": "Bot Linked!"})
-        logger.info("Data channel test message sent")
-
-    @llm.event_handler("on_llm_response_start")
-    async def on_llm_response_start(service, frame):
-        context.set_system_instruction(user_state.get_system_prompt())
-
-    @llm.event_handler("on_llm_response_end")
-    async def on_llm_response_end(service, frame):
-        history = context.get_messages()
-        # This will now show up in your terminal logs
-        logger.info(f"📤 Sending history update ({len(history)} messages)")
         await transport.send_app_message({
-            "type": "history_update",
-            "history": history
-        })
+            "type": "status", 
+            "msg": "Bot Linked!",
+            "session_id": session_id
+                        })
+        logger.info(f"Client connected - Session: {session_id}")
+
+    @transport.event_handler("on_app_message")
+    async def on_app_message(transport, message):
+        """Handle messages from client"""
+        msg_type = message.get("type")
+        
+        if msg_type == "get_history":
+            # Send full history from database
+            history = db.get_history(session_id)
+            await transport.send_app_message({
+                "type": "history_response",
+                "history": history
+            })
 
     runner = PipelineRunner(handle_sigint=False)
     await runner.run(task)

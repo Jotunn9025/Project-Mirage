@@ -5,84 +5,354 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WebRTC Voice Agent</title>
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; background-color: #f4f4f9; }
-        #status { font-size: 20px; margin: 20px; color: #555; }
-        button { padding: 12px 24px; font-size: 16px; cursor: pointer; border-radius: 8px; border: none; background: #007bff; color: white; }
-        button:hover { background: #0056b3; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { 
+            max-width: 1200px; 
+            margin: 0 auto; 
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .card { 
+            background: white; 
+            border-radius: 16px; 
+            padding: 24px; 
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+        h1 { text-align: center; color: white; margin-bottom: 20px; grid-column: 1 / -1; }
+        h2 { font-size: 1.5em; margin-bottom: 16px; color: #333; }
         
-        /* New Styles for History */
-        #history-container { max-width: 600px; margin: 30px auto; text-align: left; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        .message { margin-bottom: 12px; padding: 8px 12px; border-radius: 8px; }
-        .user { background: #e9ecef; border-left: 4px solid #007bff; }
-        .assistant { background: #d4edda; border-left: 4px solid #28a745; }
-        .role-label { font-weight: bold; font-size: 0.8em; text-transform: uppercase; display: block; margin-bottom: 4px; }
+        #status { 
+            font-size: 18px; 
+            padding: 12px 24px; 
+            border-radius: 8px;
+            text-align: center;
+            margin-bottom: 16px;
+            font-weight: 600;
+        }
+        #status.connected { background: #d4edda; color: #155724; }
+        #status.disconnected { background: #f8d7da; color: #721c24; }
+        #status.connecting { background: #fff3cd; color: #856404; }
+        
+        button { 
+            width: 100%;
+            padding: 14px 24px; 
+            font-size: 16px; 
+            cursor: pointer; 
+            border-radius: 8px; 
+            border: none; 
+            background: #667eea; 
+            color: white;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+        button:hover { background: #5568d3; transform: translateY(-2px); }
+        button:active { transform: translateY(0); }
+        button:disabled { background: #ccc; cursor: not-allowed; transform: none; }
+        
+        .input-group { margin-bottom: 16px; }
+        .input-group label { 
+            display: block; 
+            margin-bottom: 6px; 
+            font-weight: 600; 
+            color: #555; 
+        }
+        .input-group input, .input-group textarea, .input-group select { 
+            width: 100%; 
+            padding: 10px; 
+            border: 2px solid #e0e0e0; 
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        .input-group input:focus, .input-group textarea:focus, .input-group select:focus { 
+            outline: none; 
+            border-color: #667eea; 
+        }
+        .input-group textarea { resize: vertical; min-height: 80px; }
+        
+        .history-container { max-height: 500px; overflow-y: auto; }
+        .message { 
+            margin-bottom: 12px; 
+            padding: 12px 16px; 
+            border-radius: 8px;
+            animation: slideIn 0.3s ease;
+        }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .user { background: #e3f2fd; border-left: 4px solid #2196f3; }
+        .assistant { background: #f3e5f5; border-left: 4px solid #9c27b0; }
+        .role-label { 
+            font-weight: bold; 
+            font-size: 0.75em; 
+            text-transform: uppercase; 
+            display: block; 
+            margin-bottom: 6px;
+            color: #666;
+        }
+        .message-content { line-height: 1.5; }
+        .timestamp { 
+            font-size: 0.7em; 
+            color: #999; 
+            margin-top: 6px;
+            display: block;
+        }
+        
+        .btn-danger { background: #dc3545; }
+        .btn-danger:hover { background: #c82333; }
+        
+        .session-info { 
+            background: #e9ecef; 
+            padding: 8px 12px; 
+            border-radius: 6px; 
+            font-size: 0.85em;
+            margin-bottom: 12px;
+            font-family: monospace;
+        }
+        
+        .emotion-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.7em;
+            font-weight: bold;
+            margin-left: 8px;
+            text-transform: uppercase;
+        }
+        
+        .warning {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 12px;
+            color: #856404;
+            font-size: 0.9em;
+        }
+        
+        #full-page { grid-column: 1 / -1; }
     </style>
 </head>
 <body>
-    <h1>WebRTC Voice Agent</h1>
-    <p id="status">Disconnected</p>
-    <button id="connect-btn">Connect</button>
+    <h1>🎭 WebRTC Multi-Character Voice Agent</h1>
     
-    <div id="history-container">
-        <h3>Conversation History</h3>
-        <div id="history-log"></div>
+    <div class="container">
+        <!-- Connection Panel -->
+        <div class="card">
+            <h2>Connection</h2>
+            <div class="warning">
+                ⚠️ Character settings are locked once connected. Set them before connecting!
+            </div>
+            <div id="status" class="disconnected">Disconnected</div>
+            <div id="session-info" class="session-info" style="display: none;">
+                Session: <span id="session-id">-</span>
+            </div>
+            <button id="connect-btn">Connect</button>
+            <button id="clear-session-btn" class="btn-danger" style="margin-top: 12px; display: none;">Clear Session</button>
+        </div>
+        
+        <!-- Character Settings Panel -->
+        <div class="card">
+            <h2>Character Settings</h2>
+            
+            <div class="input-group">
+                <label>Your Name</label>
+                <input type="text" id="user-name" value="Guest" />
+            </div>
+            
+            <div class="input-group">
+                <label>Character Preset</label>
+                <select id="character-select">
+                    <option value="custom">Custom Character</option>
+                    <option value="alfred" selected>Alfred The Butler</option>
+                    <option value="sherlock">Sherlock Holmes</option>
+                    <option value="yoda">Master Yoda</option>
+                    <option value="pirate">Captain Blackbeard</option>
+                    <option value="therapist">Dr. Sarah (Therapist)</option>
+                    <option value="coach">Coach Mike (Fitness)</option>
+                </select>
+            </div>
+            
+            <div class="input-group">
+                <label>Character Name</label>
+                <input type="text" id="character-name" value="Alfred The Butler" />
+            </div>
+            
+            <div class="input-group">
+                <label>Character Description</label>
+                <textarea id="character-info">Very Concise and Polite Gentleman. Always ready to serve.</textarea>
+            </div>
+            
+            <p style="font-size: 0.85em; color: #666; margin-top: 8px;">
+                💡 These settings are sent when you connect and cannot be changed mid-conversation.
+            </p>
+        </div>
+        
+        <!-- Conversation History Panel -->
+        <div class="card" id="full-page">
+            <h2>Conversation History</h2>
+            <div class="history-container" id="history-log">
+                <p style="text-align: center; color: #999;">No messages yet</p>
+            </div>
+        </div>
     </div>
 
     <audio id="audio-el" autoplay></audio>
 
     <script>
-        const statusEl = document.getElementById("status")
-        const buttonEl = document.getElementById("connect-btn")
-        const audioEl = document.getElementById("audio-el")
-        const historyLog = document.getElementById("history-log")
+        const statusEl = document.getElementById("status");
+        const buttonEl = document.getElementById("connect-btn");
+        const audioEl = document.getElementById("audio-el");
+        const historyLog = document.getElementById("history-log");
+        const sessionInfoEl = document.getElementById("session-info");
+        const sessionIdEl = document.getElementById("session-id");
+        const clearSessionBtn = document.getElementById("clear-session-btn");
+        
+        const userNameInput = document.getElementById("user-name");
+        const characterSelect = document.getElementById("character-select");
+        const characterNameInput = document.getElementById("character-name");
+        const characterInfoInput = document.getElementById("character-info");
 
-        let connected = false
-        let peerConnection = null
+        let connected = false;
+        let peerConnection = null;
+        let dataChannel = null;
+        let sessionId = null;
 
-        // --- NEW: Handle incoming Data Channel messages ---
+        // Predefined characters
+        const characters = {
+            alfred: {
+                name: "Alfred The Butler",
+                info: "Very Concise and Polite Gentleman. Always ready to serve."
+            },
+            sherlock: {
+                name: "Sherlock Holmes",
+                info: "Brilliant detective with razor-sharp deduction skills. Speaks precisely and analytically."
+            },
+            yoda: {
+                name: "Master Yoda",
+                info: "Wise Jedi Master. Speaks in distinctive inverted sentence structure. Very wise and concise."
+            },
+            pirate: {
+                name: "Captain Blackbeard",
+                info: "Rough and rowdy pirate captain. Uses pirate slang and seafaring terms. Bold and adventurous."
+            },
+            therapist: {
+                name: "Dr. Sarah",
+                info: "Empathetic therapist. Asks thoughtful questions and provides supportive guidance. Warm and understanding."
+            },
+            coach: {
+                name: "Coach Mike",
+                info: "Motivational fitness coach. Energetic and encouraging. Pushes you to be your best self."
+            }
+        };
+
+        // Character selection handler
+        characterSelect.addEventListener("change", (e) => {
+            const char = characters[e.target.value];
+            if (char) {
+                characterNameInput.value = char.name;
+                characterInfoInput.value = char.info;
+            }
+        });
+
+        // Disable character settings when connected
+        const lockCharacterSettings = (locked) => {
+            userNameInput.disabled = locked;
+            characterSelect.disabled = locked;
+            characterNameInput.disabled = locked;
+            characterInfoInput.disabled = locked;
+        };
+
+        // Data channel setup
         const setupDataChannel = (channel) => {
+            dataChannel = channel;
+            
             channel.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 console.log("📥 Message from Bot:", data);
 
-                if (data.type === "history_update" || data.type === "final_history") {
+                if (data.type === "history_update" || data.type === "history_response") {
                     renderHistory(data.history);
+                } else if (data.type === "status" && data.session_id) {
+                    sessionId = data.session_id;
+                    sessionIdEl.textContent = sessionId;
+                    sessionInfoEl.style.display = "block";
+                    clearSessionBtn.style.display = "block";
                 }
             };
-            channel.onopen = () => console.log("✅ Data Channel Open");
+            
+            channel.onopen = () => {
+                console.log("✅ Data Channel Open");
+                // Request initial history
+                sendMessage({ type: "get_history" });
+            };
+            
+            channel.onerror = (err) => console.error("❌ Data Channel Error:", err);
+        };
+
+        const sendMessage = (message) => {
+            if (dataChannel && dataChannel.readyState === "open") {
+                dataChannel.send(JSON.stringify(message));
+            }
         };
 
         const renderHistory = (history) => {
-            historyLog.innerHTML = ""; // Clear current view
+            if (!history || history.length === 0) {
+                historyLog.innerHTML = '<p style="text-align: center; color: #999;">No messages yet</p>';
+                return;
+            }
+            
+            historyLog.innerHTML = "";
             history.forEach(msg => {
-                if (msg.role === 'system') return; // Skip system prompts
+                if (msg.role === 'system') return;
                 
                 const div = document.createElement("div");
                 div.className = `message ${msg.role}`;
-                div.innerHTML = `<span class="role-label">${msg.role}</span>${msg.content}`;
+                
+                const emotionBadge = msg.emotion && msg.emotion !== 'neutral' 
+                    ? `<span class="emotion-badge" style="background: #ffc107; color: #000;">${msg.emotion}</span>`
+                    : '';
+                
+                const timestamp = msg.timestamp 
+                    ? `<span class="timestamp">${new Date(msg.timestamp).toLocaleString()}</span>`
+                    : '';
+                
+                div.innerHTML = `
+                    <span class="role-label">${msg.role}${emotionBadge}</span>
+                    <div class="message-content">${msg.content}</div>
+                    ${timestamp}
+                `;
                 historyLog.appendChild(div);
             });
-            // Auto-scroll to bottom
+            
             historyLog.scrollTop = historyLog.scrollHeight;
         };
 
         const sendIceCandidate = async (pc, candidate) => {
             await fetch('/api/offer', {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                pc_id: pc.pc_id,
-                candidates:[{
-                    candidate: candidate.candidate,
-                    sdp_mid: candidate.sdpMid,
-                    sdp_mline_index: candidate.sdpMLineIndex
-                }]
-              })
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    pc_id: pc.pc_id,
+                    candidates: [{
+                        candidate: candidate.candidate,
+                        sdp_mid: candidate.sdpMid,
+                        sdp_mline_index: candidate.sdpMLineIndex
+                    }]
+                })
             });
         };
 
         const createSmallWebRTCConnection = async (audioTrack) => {
-            const config = { iceServers:[ { urls:"stun:stun.l.google.com:19302" } ] };
+            const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
             const pc = new RTCPeerConnection(config);
             
             pc.pendingIceCandidates = [];
@@ -90,7 +360,6 @@
             
             addPeerConnectionEventListeners(pc);
 
-            // --- IMPORTANT: Listen for the Data Channel created by the bot ---
             pc.ondatachannel = (event) => {
                 setupDataChannel(event.channel);
             };
@@ -101,13 +370,33 @@
             
             await pc.setLocalDescription(await pc.createOffer());
             const offer = pc.localDescription;
+            
+            // Include character configuration in the offer
+            const requestBody = {
+                sdp: offer.sdp,
+                type: offer.type,
+                character_name: characterNameInput.value,
+                character_info: characterInfoInput.value,
+                user_name: userNameInput.value
+            };
+            
+            console.log("📤 Sending offer with config:", requestBody);
+            
             const response = await fetch('/api/offer', {
-                body: JSON.stringify({ sdp: offer.sdp, type: offer.type}),
+                body: JSON.stringify(requestBody),
                 headers: { 'Content-Type': 'application/json' },
                 method: 'POST',
             });
+            
             const answer = await response.json();
+            console.log("📨 Received answer:", answer);
+            
             pc.pc_id = answer.pc_id;
+            sessionId = answer.session_id;
+            sessionIdEl.textContent = sessionId;
+            sessionInfoEl.style.display = "block";
+            clearSessionBtn.style.display = "block";
+            
             await pc.setRemoteDescription(answer);
             
             pc.canSendIceCandidates = true;
@@ -117,35 +406,61 @@
             pc.pendingIceCandidates = [];
             
             return pc;
-        }
+        };
 
         const connect = async () => {
             _onConnecting();
             try {
-                const audioStream = await navigator.mediaDevices.getUserMedia({audio: true});
+                const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 peerConnection = await createSmallWebRTCConnection(audioStream.getAudioTracks()[0]);
+                lockCharacterSettings(true);
             } catch (err) {
                 console.error("Connection failed:", err);
                 _onDisconnected();
+                lockCharacterSettings(false);
             }
-        }
+        };
 
         const addPeerConnectionEventListeners = (pc) => {
             pc.onconnectionstatechange = () => {
                 if (pc?.connectionState === 'connected') _onConnected();
-                else if (pc?.connectionState === 'disconnected' || pc?.connectionState === 'closed') _onDisconnected();
-            }
-            pc.onicecandidate = async (event) => {
-                if (event.candidate) {
-                    if (pc.canSendIceCandidates && pc.pc_id) await sendIceCandidate(pc, event.candidate);
-                    else pc.pendingIceCandidates.push(event.candidate);
+                else if (pc?.connectionState === 'disconnected' || pc?.connectionState === 'closed') {
+                    _onDisconnected();
+                    lockCharacterSettings(false);
                 }
             };
-        }
+            
+            pc.onicecandidate = async (event) => {
+                if (event.candidate) {
+                    if (pc.canSendIceCandidates && pc.pc_id) {
+                        await sendIceCandidate(pc, event.candidate);
+                    } else {
+                        pc.pendingIceCandidates.push(event.candidate);
+                    }
+                }
+            };
+        };
 
-        const _onConnecting = () => { statusEl.textContent = "Connecting..."; buttonEl.textContent = "Disconnect"; connected = true; }
-        const _onConnected = () => { statusEl.textContent = "Connected"; connected = true; }
-        const _onDisconnected = () => { statusEl.textContent = "Disconnected"; buttonEl.textContent = "Connect"; connected = false; }
+        const _onConnecting = () => { 
+            statusEl.textContent = "Connecting..."; 
+            statusEl.className = "connecting";
+            buttonEl.textContent = "Disconnect"; 
+            connected = true; 
+        };
+        
+        const _onConnected = () => { 
+            statusEl.textContent = "Connected"; 
+            statusEl.className = "connected";
+            connected = true; 
+        };
+        
+        const _onDisconnected = () => { 
+            statusEl.textContent = "Disconnected"; 
+            statusEl.className = "disconnected";
+            buttonEl.textContent = "Connect"; 
+            connected = false;
+            dataChannel = null;
+        };
 
         const disconnect = () => {
             if (peerConnection) {
@@ -153,8 +468,31 @@
                 peerConnection = null;
             }
             _onDisconnected();
-        }
+            lockCharacterSettings(false);
+        };
 
+        // Clear session button handler
+        clearSessionBtn.addEventListener("click", async () => {
+            if (!sessionId) return;
+            
+            if (confirm("Clear all conversation history for this session?")) {
+                try {
+                    const response = await fetch(`/api/session/${sessionId}`, {
+                        method: 'DELETE'
+                    });
+                    
+                    if (response.ok) {
+                        historyLog.innerHTML = '<p style="text-align: center; color: #999;">Session cleared</p>';
+                        alert("Session cleared successfully!");
+                    }
+                } catch (err) {
+                    console.error("Error clearing session:", err);
+                    alert("Failed to clear session");
+                }
+            }
+        });
+
+        // Connect button handler
         buttonEl.addEventListener("click", async () => {
             if (!connected) await connect();
             else disconnect();
