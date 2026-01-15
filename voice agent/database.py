@@ -43,7 +43,12 @@ class DatabaseManager:
             "user_name": user_name,
             "character_name": character_name,
             "character_info": character_info,
-            "messages": []
+            "messages": [],
+            "emotions": {
+                "user_emotion": "Neutral",
+                "bot_emotion": "Neutral",
+                "last_updated": datetime.now().isoformat()
+            }
         }
         self._save_session(session_id, data)
         logger.info(f"Created session: {session_id} | User: {user_name} | Character: {character_name}")
@@ -77,6 +82,33 @@ class DatabaseManager:
         if limit:
             return messages[-limit:]
         return messages
+    
+    def update_emotions(self, session_id: str, user_emotion: str, bot_emotion: str):
+        """Update current emotions for a session"""
+        data = self._load_session(session_id)
+        if not data:
+            self.create_session(session_id)
+            data = self._load_session(session_id)
+        
+        data["emotions"] = {
+            "user_emotion": user_emotion,
+            "bot_emotion": bot_emotion,
+            "last_updated": datetime.now().isoformat()
+        }
+        data["updated_at"] = datetime.now().isoformat()
+        self._save_session(session_id, data)
+        logger.info(f"🎭 Updated emotions for {session_id}: User={user_emotion}, Bot={bot_emotion}")
+    
+    def get_emotions(self, session_id: str) -> Optional[Dict]:
+        """Get current emotions for a session"""
+        data = self._load_session(session_id)
+        if data:
+            return data.get("emotions", {
+                "user_emotion": "Neutral",
+                "bot_emotion": "Neutral",
+                "last_updated": datetime.now().isoformat()
+            })
+        return None
     
     def clear_session(self, session_id: str):
         """Clear all data for a session"""
